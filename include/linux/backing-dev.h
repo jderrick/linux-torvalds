@@ -19,6 +19,7 @@
 
 int __must_check bdi_init(struct backing_dev_info *bdi);
 void bdi_destroy(struct backing_dev_info *bdi);
+void bdi_io_wait(struct backing_dev_info *bdi, queue_cookie_t cookie);
 
 __printf(3, 4)
 int bdi_register(struct backing_dev_info *bdi, struct device *parent,
