@@ -1969,7 +1969,6 @@ queue_cookie_t generic_make_request(struct bio *bio)
 	do {
 		struct request_queue *q = bdev_get_queue(bio->bi_bdev);
 
-		q->make_request_fn(q, bio);
 		ret = q->make_request_fn(q, bio);
 
 		bio = bio_list_pop(current->bio_list);

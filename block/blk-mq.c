@@ -1279,6 +1279,7 @@ static queue_cookie_t blk_mq_make_request(struct request_queue *q, struct bio *b
 	unsigned int request_count = 0;
 	struct blk_plug *plug;
 	struct request *same_queue_rq = NULL;
+	queue_cookie_t cookie;
 
 	blk_queue_bounce(q, &bio);
 
@@ -1294,6 +1295,8 @@ static queue_cookie_t blk_mq_make_request(struct request_queue *q, struct bio *b
 	rq = blk_mq_map_request(q, bio, &data);
 	if (unlikely(!rq))
 		return QUEUE_COOKIE_NONE;
+
+	cookie = blk_tag_to_queue_cookie(rq->tag, data.hctx->queue_num);
 
 	if (unlikely(is_flush_fua)) {
 		blk_mq_bio_to_request(rq, bio);
@@ -1332,7 +1335,7 @@ static queue_cookie_t blk_mq_make_request(struct request_queue *q, struct bio *b
 			old_rq = rq;
 		blk_mq_put_ctx(data.ctx);
 		if (!old_rq)
-			return QUEUE_COOKIE_NONE;
+			return cookie;
 		if (!blk_mq_direct_issue_request(old_rq))
 			return QUEUE_COOKIE_NONE;
 		blk_mq_insert_request(old_rq, false, true, true);
@@ -1350,7 +1353,7 @@ run_queue:
 		blk_mq_run_hw_queue(data.hctx, !is_sync || is_flush_fua);
 	}
 	blk_mq_put_ctx(data.ctx);
-	return QUEUE_COOKIE_NONE;
+	return cookie;
 }
 
 /*
@@ -1365,6 +1368,7 @@ static queue_cookie_t blk_sq_make_request(struct request_queue *q, struct bio *b
 	unsigned int request_count = 0;
 	struct blk_map_ctx data;
 	struct request *rq;
+	queue_cookie_t cookie;
 
 	blk_queue_bounce(q, &bio);
 
@@ -1380,6 +1384,8 @@ static queue_cookie_t blk_sq_make_request(struct request_queue *q, struct bio *b
 	rq = blk_mq_map_request(q, bio, &data);
 	if (unlikely(!rq))
 		return QUEUE_COOKIE_NONE;
+
+	cookie = blk_tag_to_queue_cookie(rq->tag, data.hctx->queue_num);
 
 	if (unlikely(is_flush_fua)) {
 		blk_mq_bio_to_request(rq, bio);
@@ -1418,7 +1424,7 @@ run_queue:
 	}
 
 	blk_mq_put_ctx(data.ctx);
-	return QUEUE_COOKIE_NONE; 
+	return cookie;
 }
 
 /*
