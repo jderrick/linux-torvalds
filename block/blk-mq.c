@@ -1409,7 +1409,7 @@ static queue_cookie_t blk_sq_make_request(struct request_queue *q, struct bio *b
 		}
 		list_add_tail(&rq->queuelist, &plug->mq_list);
 		blk_mq_put_ctx(data.ctx);
-		return QUEUE_COOKIE_NONE;
+		return cookie;
 	}
 
 	if (!blk_mq_merge_queue_io(data.hctx, data.ctx, rq, bio)) {
