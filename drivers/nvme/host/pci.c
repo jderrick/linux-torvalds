@@ -102,6 +102,12 @@ struct async_cmd_info {
 	void *ctx;
 };
 
+struct nvme_queue_stats {
+	int cdepth;
+	int hwm;
+	u64 iocnt;
+};
+
 /*
  * An NVM Express queue.  Each device has at least two (one for admin
  * commands and one for I/O commands).
@@ -127,6 +133,7 @@ struct nvme_queue {
 	u8 cq_phase;
 	u8 cqe_seen;
 	struct async_cmd_info cmdinfo;
+	struct nvme_queue_stats stats;
 };
 
 /*
@@ -382,6 +389,75 @@ static void *nvme_finish_cmd(struct nvme_queue *nvmeq, int tag,
 	return ctx;
 }
 
+static void nvme_update_cdepth(struct nvme_queue *nvmeq)
+{
+	struct nvme_queue_stats *stats = &nvmeq->stats;
+	int cdepth = nvmeq->sq_tail - nvmeq->cq_head;
+	if (cdepth < 0)
+		cdepth += nvmeq->q_depth;
+
+	stats->cdepth = cdepth;
+	stats->hwm = max_t(int, stats->hwm, cdepth);
+}
+
+static ssize_t nvme_sysfs_cdepth_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct nvme_dev *ndev = dev_get_drvdata(dev);
+	int count = 0, i;
+
+	count += sprintf(buf + count, "Queue\tDepth\tSQT/CQH\tIOs\n");
+	for (i = 0; i < ndev->online_queues; i++) {
+		struct nvme_queue *nvmeq = ndev->queues[i];
+
+		spin_lock(&nvmeq->q_lock);
+		nvme_process_cq(nvmeq);
+		nvme_update_cdepth(nvmeq);
+		spin_unlock(&nvmeq->q_lock);
+
+		count += sprintf(buf + count, "%d\t%d\t%d/%d\t%llu\n",
+				i, nvmeq->stats.cdepth,
+				nvmeq->sq_tail, nvmeq->cq_head,
+				nvmeq->stats.iocnt);
+	}
+
+	return count;
+}
+static DEVICE_ATTR(cdepth, S_IRUGO, nvme_sysfs_cdepth_show, NULL);
+
+static ssize_t nvme_sysfs_hwm_store(struct device *dev,
+				struct device_attribute *attr, const char *buf,
+				size_t count)
+{
+	struct nvme_dev *ndev = dev_get_drvdata(dev);
+	int i;
+
+	for (i = 0; i < ndev->online_queues; i++) {
+		struct nvme_queue *nvmeq = ndev->queues[i];
+		nvmeq->stats.hwm = 0;
+	}
+
+	return count;
+}
+
+static ssize_t nvme_sysfs_hwm_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct nvme_dev *ndev = dev_get_drvdata(dev);
+	int count = 0, i;
+
+	count += sprintf(buf + count, "Queue\tDepth\n");
+	for (i = 0; i < ndev->online_queues; i++) {
+		struct nvme_queue *nvmeq = ndev->queues[i];
+		nvme_update_cdepth(nvmeq);
+		count += sprintf(buf + count, "%d\t%d\n",
+				i, nvmeq->stats.hwm);
+	}
+
+	return count;
+}
+static DEVICE_ATTR(hwm, S_IWUSR | S_IRUGO, nvme_sysfs_hwm_show, nvme_sysfs_hwm_store);
+
 /**
  * nvme_submit_cmd() - Copy a command into a queue and ring the doorbell
  * @nvmeq: The queue to use
@@ -403,6 +479,9 @@ static void __nvme_submit_cmd(struct nvme_queue *nvmeq,
 		tail = 0;
 	writel(tail, nvmeq->q_db);
 	nvmeq->sq_tail = tail;
+
+	nvmeq->stats.iocnt++;
+	nvme_update_cdepth(nvmeq);
 }
 
 static void nvme_submit_cmd(struct nvme_queue *nvmeq, struct nvme_command *cmd)
@@ -3340,12 +3419,24 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (result)
 		goto put_dev;
 
+	result = device_create_file(dev->device, &dev_attr_cdepth);
+	if (result)
+		goto put_rc;
+
+	result = device_create_file(dev->device, &dev_attr_hwm);
+	if (result)
+		goto put_cd;
+
 	INIT_LIST_HEAD(&dev->node);
 	INIT_WORK(&dev->scan_work, nvme_dev_scan);
 	INIT_WORK(&dev->probe_work, nvme_probe_work);
 	schedule_work(&dev->probe_work);
 	return 0;
 
+ put_cd:
+	device_remove_file(dev->device, &dev_attr_cdepth);
+ put_rc:
+	device_remove_file(dev->device, &dev_attr_reset_controller);
  put_dev:
 	device_destroy(nvme_class, MKDEV(nvme_char_major, dev->instance));
 	put_device(dev->device);
@@ -3390,6 +3481,8 @@ static void nvme_remove(struct pci_dev *pdev)
 	flush_work(&dev->probe_work);
 	flush_work(&dev->reset_work);
 	flush_work(&dev->scan_work);
+	device_remove_file(dev->device, &dev_attr_hwm);
+	device_remove_file(dev->device, &dev_attr_cdepth);
 	device_remove_file(dev->device, &dev_attr_reset_controller);
 	nvme_dev_remove(dev);
 	nvme_dev_shutdown(dev);
